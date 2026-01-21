@@ -9,6 +9,8 @@ pub const leb128 = @import("leb128.zig");
 pub const wasm = @import("wasm.zig");
 pub const token = @import("token.zig");
 pub const lexer = @import("lexer.zig");
+pub const ast = @import("ast.zig");
+pub const parser = @import("parser.zig");
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
@@ -21,4 +23,6 @@ test {
     _ = wasm;
     _ = token;
     _ = lexer;
+    _ = ast;
+    _ = parser;
 }
