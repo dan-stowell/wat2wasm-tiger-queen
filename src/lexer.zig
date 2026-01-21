@@ -2,6 +2,11 @@
 //!
 //! Tokenizes WAT source into a caller-provided token buffer.
 //! No allocation - all output goes into the provided slice.
+//!
+//! ## Known Limitations (TODO)
+//! - `nan`, `inf`, `nan:0x...` float literals not yet recognized as floats
+//! - Unicode escapes in strings (`\u{...}`) not validated
+//! - Underscores in hex numbers (`0xDEAD_BEEF`) not supported
 
 const Token = @import("token.zig").Token;
 
