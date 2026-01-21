@@ -4,7 +4,9 @@
 //! No allocation - all output goes into the provided slice.
 
 const Node = @import("ast.zig").Node;
+const ast = @import("ast.zig");
 const wasm = @import("wasm.zig");
+const leb128 = @import("leb128.zig");
 
 pub const Encoder = struct {
     nodes: []const Node,
@@ -56,10 +58,152 @@ pub const Encoder = struct {
         output[pos..][0..4].* = wasm.version;
         pos += 4;
 
-        // TODO: encode sections based on module children
-        // For now, empty module has no sections
+        // Count functions
+        const func_count = self.countFunctions();
+
+        if (func_count > 0) {
+            // Type section: define function signatures
+            // For now, all functions have signature () -> ()
+            pos = self.encodeTypeSection(output, pos, func_count) orelse {
+                return .{ .err = .{ .tag = .buffer_overflow, .node_idx = 0 } };
+            };
+
+            // Function section: map functions to types
+            pos = self.encodeFunctionSection(output, pos, func_count) orelse {
+                return .{ .err = .{ .tag = .buffer_overflow, .node_idx = 0 } };
+            };
+
+            // Code section: function bodies
+            pos = self.encodeCodeSection(output, pos, func_count) orelse {
+                return .{ .err = .{ .tag = .buffer_overflow, .node_idx = 0 } };
+            };
+        }
 
         return .{ .ok = pos };
+    }
+
+    fn countFunctions(self: *Encoder) u32 {
+        var count: u32 = 0;
+        var iter = ast.children(self.nodes, &self.nodes[0]);
+        while (iter.next()) |node| {
+            if (node.tag == .func) count += 1;
+        }
+        return count;
+    }
+
+    /// Encode type section. For now, all functions are () -> ()
+    fn encodeTypeSection(self: *Encoder, output: []u8, start_pos: u32, func_count: u32) ?u32 {
+        _ = self;
+        var pos = start_pos;
+
+        // Section content (build in temp area, then write with size prefix)
+        // For () -> () signature: 0x60 0x00 0x00
+
+        // Content: count (LEB128) + count * signature
+        // Each signature: 0x60 (func type) + 0x00 (0 params) + 0x00 (0 results)
+        var content_buf: [64]u8 = undefined;
+        var content_pos: usize = 0;
+
+        // Number of types
+        content_pos += leb128.encodeUnsigned(func_count, content_buf[content_pos..]) orelse return null;
+
+        // Each type signature
+        var i: u32 = 0;
+        while (i < func_count) : (i += 1) {
+            if (content_pos + 3 > content_buf.len) return null;
+            content_buf[content_pos] = wasm.func_type; // 0x60
+            content_buf[content_pos + 1] = 0x00; // 0 params
+            content_buf[content_pos + 2] = 0x00; // 0 results
+            content_pos += 3;
+        }
+
+        // Write section: id + size + content
+        if (pos + 1 > output.len) return null;
+        output[pos] = @intFromEnum(wasm.Section.type);
+        pos += 1;
+
+        // Section size
+        const size_len = leb128.encodeUnsigned(content_pos, output[pos..]) orelse return null;
+        pos += @intCast(size_len);
+
+        // Section content
+        if (pos + content_pos > output.len) return null;
+        @memcpy(output[pos..][0..content_pos], content_buf[0..content_pos]);
+        pos += @intCast(content_pos);
+
+        return pos;
+    }
+
+    /// Encode function section: maps each function to its type index
+    fn encodeFunctionSection(self: *Encoder, output: []u8, start_pos: u32, func_count: u32) ?u32 {
+        _ = self;
+        var pos = start_pos;
+
+        var content_buf: [64]u8 = undefined;
+        var content_pos: usize = 0;
+
+        // Number of functions
+        content_pos += leb128.encodeUnsigned(func_count, content_buf[content_pos..]) orelse return null;
+
+        // Each function references type index (all type 0 for now)
+        var i: u32 = 0;
+        while (i < func_count) : (i += 1) {
+            content_pos += leb128.encodeUnsigned(i, content_buf[content_pos..]) orelse return null;
+        }
+
+        // Write section
+        if (pos + 1 > output.len) return null;
+        output[pos] = @intFromEnum(wasm.Section.function);
+        pos += 1;
+
+        const size_len = leb128.encodeUnsigned(content_pos, output[pos..]) orelse return null;
+        pos += @intCast(size_len);
+
+        if (pos + content_pos > output.len) return null;
+        @memcpy(output[pos..][0..content_pos], content_buf[0..content_pos]);
+        pos += @intCast(content_pos);
+
+        return pos;
+    }
+
+    /// Encode code section: function bodies
+    fn encodeCodeSection(self: *Encoder, output: []u8, start_pos: u32, func_count: u32) ?u32 {
+        _ = self;
+        var pos = start_pos;
+
+        var content_buf: [256]u8 = undefined;
+        var content_pos: usize = 0;
+
+        // Number of function bodies
+        content_pos += leb128.encodeUnsigned(func_count, content_buf[content_pos..]) orelse return null;
+
+        // Each function body: size + locals_count + code
+        // Empty function: size=2, locals_count=0, code=end(0x0B)
+        var i: u32 = 0;
+        while (i < func_count) : (i += 1) {
+            // Body size (2 bytes: 1 for local count + 1 for end)
+            content_pos += leb128.encodeUnsigned(2, content_buf[content_pos..]) orelse return null;
+            // Local declarations count = 0
+            content_pos += leb128.encodeUnsigned(0, content_buf[content_pos..]) orelse return null;
+            // Instructions: just 'end'
+            if (content_pos >= content_buf.len) return null;
+            content_buf[content_pos] = @intFromEnum(wasm.Op.end);
+            content_pos += 1;
+        }
+
+        // Write section
+        if (pos + 1 > output.len) return null;
+        output[pos] = @intFromEnum(wasm.Section.code);
+        pos += 1;
+
+        const size_len = leb128.encodeUnsigned(content_pos, output[pos..]) orelse return null;
+        pos += @intCast(size_len);
+
+        if (pos + content_pos > output.len) return null;
+        @memcpy(output[pos..][0..content_pos], content_buf[0..content_pos]);
+        pos += @intCast(content_pos);
+
+        return pos;
     }
 };
 

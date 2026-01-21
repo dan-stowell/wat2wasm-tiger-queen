@@ -70,16 +70,80 @@ pub const Parser = struct {
             .token_idx = module_token,
         };
 
-        // For now, skip to closing paren (no children yet)
-        // TODO: parse module fields (func, memory, etc.)
-        
+        var node_count: u32 = 1;
+        var last_child: u32 = Node.none;
+
+        // Parse module fields
+        while (self.check(.lparen)) {
+            const child_result = self.parseModuleField(nodes, node_count);
+            switch (child_result) {
+                .ok => |new_count| {
+                    // Link child to module
+                    if (last_child == Node.none) {
+                        nodes[0].first_child = node_count;
+                    } else {
+                        nodes[last_child].next_sibling = node_count;
+                    }
+                    last_child = node_count;
+                    node_count = new_count;
+                },
+                .err => |err| return .{ .err = err },
+            }
+        }
+
         // Expect ')'
         if (!self.check(.rparen)) {
             return .{ .err = .{ .tag = .expected_rparen, .token_idx = self.pos } };
         }
         self.pos += 1;
 
-        return .{ .ok = 1 };
+        return .{ .ok = node_count };
+    }
+
+    /// Parse a module field: (func ...), (memory ...), etc.
+    fn parseModuleField(self: *Parser, nodes: []Node, node_idx: u32) Result {
+        if (!self.check(.lparen)) {
+            return .{ .err = .{ .tag = .expected_lparen, .token_idx = self.pos } };
+        }
+        self.pos += 1;
+
+        // Check what kind of field
+        if (self.checkKeyword("func")) {
+            return self.parseFunc(nodes, node_idx);
+        }
+
+        // Unknown field - skip for now
+        return .{ .err = .{ .tag = .unexpected_token, .token_idx = self.pos } };
+    }
+
+    /// Parse a function: (func ...)
+    fn parseFunc(self: *Parser, nodes: []Node, node_idx: u32) Result {
+        const func_token = self.pos;
+        self.pos += 1; // skip 'func'
+
+        if (node_idx >= nodes.len) {
+            return .{ .err = .{ .tag = .buffer_overflow, .token_idx = self.pos } };
+        }
+
+        nodes[node_idx] = .{
+            .tag = .func,
+            .first_child = Node.none,
+            .next_sibling = Node.none,
+            .token_idx = func_token,
+        };
+
+        // For now, skip to closing paren
+        // TODO: parse params, results, locals, body
+        while (!self.check(.rparen) and !self.check(.eof)) {
+            self.pos += 1;
+        }
+
+        if (!self.check(.rparen)) {
+            return .{ .err = .{ .tag = .expected_rparen, .token_idx = self.pos } };
+        }
+        self.pos += 1;
+
+        return .{ .ok = node_idx + 1 };
     }
 
     /// Check if current token has the given tag
@@ -105,6 +169,31 @@ const std = @import("std");
 
 const testing = @import("std").testing;
 const Lexer = @import("lexer.zig").Lexer;
+
+test "parse module with empty func" {
+    const source = "(module (func))";
+
+    var tokens: [10]Token = undefined;
+    var lexer = Lexer.init(source);
+    _ = lexer.tokenize(&tokens).?;
+
+    var nodes: [10]Node = undefined;
+    var parser = Parser.init(&tokens, source);
+    const result = parser.parse(&nodes);
+
+    switch (result) {
+        .ok => |count| {
+            try testing.expectEqual(@as(u32, 2), count);
+            try testing.expectEqual(Node.Tag.module, nodes[0].tag);
+            try testing.expectEqual(@as(u32, 1), nodes[0].first_child); // module's first child is func
+            try testing.expectEqual(Node.Tag.func, nodes[1].tag);
+        },
+        .err => |err| {
+            std.debug.print("Parse error: {any} at token {d}\n", .{ err.tag, err.token_idx });
+            return error.TestUnexpectedResult;
+        },
+    }
+}
 
 test "parse empty module" {
     const source = "(module)";

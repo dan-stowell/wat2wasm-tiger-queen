@@ -17,6 +17,7 @@ run_test() {
     local wat_file=$2
     
     local out_wasm="$TMP_DIR/${name}.wasm"
+    local ref_wasm="$TMP_DIR/${name}_ref.wasm"
     
     echo -n "Testing $name... "
     
@@ -28,6 +29,21 @@ run_test() {
     
     if ! wasm-validate "$out_wasm" 2>/dev/null; then
         echo "FAIL (invalid wasm)"
+        fail=$((fail + 1))
+        return
+    fi
+    
+    # Compare against reference wat2wasm
+    if ! wat2wasm "$wat_file" -o "$ref_wasm" 2>/dev/null; then
+        echo "FAIL (reference wat2wasm failed)"
+        fail=$((fail + 1))
+        return
+    fi
+    
+    if ! cmp -s "$out_wasm" "$ref_wasm"; then
+        echo "FAIL (output differs from reference)"
+        echo "  Our output:  $(xxd -p "$out_wasm" | head -c 80)"
+        echo "  Reference:   $(xxd -p "$ref_wasm" | head -c 80)"
         fail=$((fail + 1))
         return
     fi
@@ -45,6 +61,7 @@ echo "Running tests..."
 echo
 
 run_test "empty" "$SCRIPT_DIR/empty.wat"
+run_test "simple_func" "$SCRIPT_DIR/simple_func.wat"
 
 echo
 echo "Results: $pass passed, $fail failed"
