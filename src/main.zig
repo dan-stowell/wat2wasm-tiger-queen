@@ -11,6 +11,7 @@ pub const token = @import("token.zig");
 pub const lexer = @import("lexer.zig");
 pub const ast = @import("ast.zig");
 pub const parser = @import("parser.zig");
+pub const encoder = @import("encoder.zig");
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
@@ -25,4 +26,5 @@ test {
     _ = lexer;
     _ = ast;
     _ = parser;
+    _ = encoder;
 }
